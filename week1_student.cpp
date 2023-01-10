@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <curses.h>
 
-//gcc -o week1 week_1.cpp -lwiringPi -lncurses -lm
+// gcc -o week1 week1_student.cpp -lwiringPi -lm
 
 #define frequency 25000000.0
 #define CONFIG           0x1A
@@ -50,18 +50,16 @@ float z_gyro_calibration=0;
 float roll_calibration=0;
 float pitch_calibration=0;
 float accel_z_calibration=0;
-float imu_data[6]; //gyro xyz, accel xyz
+float imu_data[6]; // gyro xyz, accel xyz
 long time_curr;
 long time_prev;
 struct timespec te;
 float yaw=0;
 float pitch_angle=0;
 float roll_angle=0;
-
  
 int main (int argc, char *argv[])
 {
-
     setup_imu();
     calibrate_imu();
 
@@ -69,183 +67,81 @@ int main (int argc, char *argv[])
     {
       read_imu();      
       update_filter();   
-      printf("ax:%10.5f\tay:%10.5f\taz:%10.5f\tvx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[3], imu_data[4], imu_data[5], imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
+      printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
     }
+}
+
+int read_raw(int address)
+{
+  int vh = wiringPiI2CReadReg8(imu, address);
+  int vl = wiringPiI2CReadReg8(imu, address+1);
+  int vw = (((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
+  if (vw > 0x8000)
+  {
+    vw = vw^0xffff;
+    vw = -vw-1;
+  }
+  return vw;
 }
 
 void calibrate_imu()
 {
-  int address; 
-  int vh,vl,vw;
   int vx_sum, vy_sum, vz_sum = 0;
-  int ax_sum, ay_sum, az_sum = 0;
+  float ax_sum, ay_sum, az_sum = 0;
 
   for (int i = 0; i < 1000; i ++) {
-    address=59; // set addres value for accel x value;
-    vh=wiringPiI2CReadReg8(imu,address);
-    vl=wiringPiI2CReadReg8(imu,address+1);
-    vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-    if(vw>0x8000)
-    {
-      vw=vw ^ 0xffff;
-      vw=-vw-1;
-    }          
-    ax_sum += vw;
-
-    address=61; // set addres value for accel y value;
-    vh=wiringPiI2CReadReg8(imu,address);
-    vl=wiringPiI2CReadReg8(imu,address+1);
-    vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-    if(vw>0x8000)
-    {
-      vw=vw ^ 0xffff;
-      vw=-vw-1;
-    }          
-    ay_sum += vw;
-
-    address=63; // set addres value for accel z value;
-    vh=wiringPiI2CReadReg8(imu,address);
-    vl=wiringPiI2CReadReg8(imu,address+1);
-    vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-    if(vw>0x8000)
-    {
-      vw=vw ^ 0xffff;
-      vw=-vw-1;
-    }          
-    az_sum += vw;
-
-    address=67; // set addres value for gyro x value;
-    vh=wiringPiI2CReadReg8(imu,address);
-    vl=wiringPiI2CReadReg8(imu,address+1);
-    vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-    if(vw>0x8000)
-    {
-      vw=vw ^ 0xffff;
-      vw=-vw-1;
-    }          
-    vx_sum += vw;
-
-    address=69; // set addres value for gyro y value;
-    vh=wiringPiI2CReadReg8(imu,address);
-    vl=wiringPiI2CReadReg8(imu,address+1);
-    vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-    if(vw>0x8000)
-    {
-      vw=vw ^ 0xffff;
-      vw=-vw-1;
-    }          
-    vy_sum += vw;
-
-    address=71; // set addres value for gyro z value;
-    vh=wiringPiI2CReadReg8(imu,address);
-    vl=wiringPiI2CReadReg8(imu,address+1);
-    vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-    if(vw>0x8000)
-    {
-      vw=vw ^ 0xffff;
-      vw=-vw-1;
-    }          
-    vz_sum += vw;
+    ax_sum += read_raw(59); // accel x 
+    ay_sum += read_raw(61); // accel y 
+    az_sum += read_raw(63); // accel z 
+    vx_sum += read_raw(67); // gyro x 
+    vy_sum += read_raw(69); // gyro y 
+    vz_sum += read_raw(71); // gyro z 
   }
 
-  x_gyro_calibration = -vx_sum/32767.0*500/1000;
-  y_gyro_calibration = -vy_sum/32767.0*500/1000;
-  z_gyro_calibration = -vz_sum/32767.0*500/1000;
+  x_gyro_calibration = -vx_sum/32767.0*0.5;
+  y_gyro_calibration = -vy_sum/32767.0*0.5;
+  z_gyro_calibration = -vz_sum/32767.0*0.5;
   
   float ax_avg = ax_sum/32767.0*2/1000;
   float ay_avg = ay_sum/32767.0*2/1000;
   float az_avg = az_sum/32767.0*2/1000;
-  roll_calibration=-atan2(ax_avg,az_avg)/M_PI*180;
-  pitch_calibration=-atan2(ay_avg,az_avg)/M_PI*180;
 
-  accel_z_calibration=1.0-az_avg;
+  roll_calibration = -atan2(ax_avg, -az_avg)/M_PI*180;
+  pitch_calibration = -atan2(ay_avg, -az_avg)/M_PI*180;
 
-  printf("calibration complete, %f %f %f %f %f %f\n\r",x_gyro_calibration,y_gyro_calibration,z_gyro_calibration,roll_calibration,pitch_calibration,accel_z_calibration);
+  accel_z_calibration = -1.0-az_avg;
+
+  printf("Calibration complete: %f %f %f %f %f %f\n\r",x_gyro_calibration,y_gyro_calibration,z_gyro_calibration,roll_calibration,pitch_calibration,accel_z_calibration);
 }
 
 void read_imu()
 {
-  int address=59; // set address value for accel x value 
-  float ax=0;
-  float az=0;
-  float ay=0; 
-  int vh,vl;
-  
-  //read in data
-  vh=wiringPiI2CReadReg8(imu,address);
-  vl=wiringPiI2CReadReg8(imu,address+1);
-  //convert 2 complement
-  int vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-  if(vw>0x8000)
-  {
-    vw=vw ^ 0xffff;
-    vw=-vw-1;
-  }          
+  int vw;
+  float ax, ay, az;
+
+  vw = read_raw(59); // accel x    
   imu_data[3]=vw/32767.0*2; // convert vw from raw values to "g's"
   
-  
-  address=61; // set address value for accel y value
-  vh=wiringPiI2CReadReg8(imu,address);
-  vl=wiringPiI2CReadReg8(imu,address+1);
-  vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-  if(vw>0x8000)
-  {
-    vw=vw ^ 0xffff;
-    vw=-vw-1;
-  }          
+  vw = read_raw(61); // accel y 
   imu_data[4]=vw/32767.0*2; // convert vw from raw values to "g's"
   
-  
-  address=63; // set addres value for accel z value;
-  vh=wiringPiI2CReadReg8(imu,address);
-  vl=wiringPiI2CReadReg8(imu,address+1);
-  vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-  if(vw>0x8000)
-  {
-    vw=vw ^ 0xffff;
-    vw=-vw-1;
-  }          
+  vw = read_raw(63); // accel z
   imu_data[5]=accel_z_calibration+vw/32767.0*2; // convert vw from raw values to g's
   
+  vw = read_raw(67); // gyro x    
+  imu_data[0]=-(x_gyro_calibration+vw/32767.0*500); // convert vw from raw values to degrees/second
   
-  address=67; // set addres value for gyro x value;
-  vh=wiringPiI2CReadReg8(imu,address);
-  vl=wiringPiI2CReadReg8(imu,address+1);
-  vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-  if(vw>0x8000)
-  {
-    vw=vw ^ 0xffff;
-    vw=-vw-1;
-  }          
-  imu_data[0]=x_gyro_calibration+vw/32767.0*500; // convert vw from raw values to degrees/second
+  vw = read_raw(69); // gyro y      
+  imu_data[1]=y_gyro_calibration+vw/32767.0*500; // convert vw from raw values to degrees/second
   
-  address=69; // set addres value for gyro y value;
-  vh=wiringPiI2CReadReg8(imu,address);
-  vl=wiringPiI2CReadReg8(imu,address+1);
-  vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-  if(vw>0x8000)
-  {
-    vw=vw ^ 0xffff;
-    vw=-vw-1;
-  }          
- imu_data[1]=y_gyro_calibration+vw/32767.0*500; // convert vw from raw values to degrees/second
-  
-  address=71; // set addres value for gyro z value;
-  vh=wiringPiI2CReadReg8(imu,address);
-  vl=wiringPiI2CReadReg8(imu,address+1);
-  vw=(((vh<<8)&0xff00)|(vl&0x00ff))&0xffff;
-  if(vw>0x8000)
-  {
-    vw=vw ^ 0xffff;
-    vw=-vw-1;
-  }          
+  vw = read_raw(71); // gyro z            
   imu_data[2]=z_gyro_calibration+vw/32767.0*500; // convert vw from raw values to degrees/second
 
   ax = imu_data[3];
   ay = imu_data[4];
   az = imu_data[5];
-  pitch_angle=pitch_calibration+atan2(ay,az)/M_PI*180;
-  roll_angle=roll_calibration+atan2(ax,az)/M_PI*180;
+  roll_angle = roll_calibration+atan2(ax, -az)/M_PI*180;
+  pitch_angle = pitch_calibration+atan2(ay, -az)/M_PI*180;
 }
 
 void update_filter()
@@ -269,7 +165,6 @@ void update_filter()
   //comp. filter for roll, pitch here: 
 }
 
-
 int setup_imu()
 {
   wiringPiSetup ();
@@ -286,8 +181,8 @@ int setup_imu()
   else
   {
   
-    printf("connected to i2c device %d\n",imu);
-    printf("imu who am i is %d \n",wiringPiI2CReadReg8(imu,0x75));
+    printf("Connected to I2C device %d\n",imu);
+    printf("IMU who am I is %d \n",wiringPiI2CReadReg8(imu,0x75));
     
     uint8_t Ascale = AFS_2G;     // AFS_2G, AFS_4G, AFS_8G, AFS_16G
     uint8_t Gscale = GFS_500DPS; // GFS_250DPS, GFS_500DPS, GFS_1000DPS, GFS_2000DPS
@@ -313,5 +208,3 @@ int setup_imu()
   }
   return 0;
 }
-
-
