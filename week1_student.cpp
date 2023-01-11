@@ -1,3 +1,6 @@
+// Week 1
+// Author: Charles Cheng
+
 #include <stdio.h>
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
@@ -10,6 +13,7 @@
 #include <sys/stat.h>
 #include <curses.h>
 
+// To compile the code, run 
 // gcc -o week1 week1_student.cpp -lwiringPi -lm
 
 #define frequency 25000000.0
@@ -71,6 +75,9 @@ int main (int argc, char *argv[])
     }
 }
 
+// Helper function read_raw
+// takes in address as input
+// outputs accel/gyro raw values 
 int read_raw(int address)
 {
   int vh = wiringPiI2CReadReg8(imu, address);
@@ -84,11 +91,15 @@ int read_raw(int address)
   return vw;
 }
 
+// Assumes the initial position of the quad 
+// is at rest, level on a flat surface
 void calibrate_imu()
 {
   int vx_sum, vy_sum, vz_sum = 0;
   float ax_sum, ay_sum, az_sum = 0;
 
+  // Sample size of 1000 
+  // Taking average of accel and gyro raw values
   for (int i = 0; i < 1000; i ++) {
     ax_sum += read_raw(59); // accel x 
     ay_sum += read_raw(61); // accel y 
@@ -109,7 +120,7 @@ void calibrate_imu()
   roll_calibration = -atan2(ax_avg, -az_avg)/M_PI*180;
   pitch_calibration = -atan2(ay_avg, -az_avg)/M_PI*180;
 
-  accel_z_calibration = -1.0-az_avg;
+  accel_z_calibration = -1.0-az_avg; // gravity points downwards, -z axis
 
   printf("Calibration complete: %f %f %f %f %f %f\n\r",x_gyro_calibration,y_gyro_calibration,z_gyro_calibration,roll_calibration,pitch_calibration,accel_z_calibration);
 }
