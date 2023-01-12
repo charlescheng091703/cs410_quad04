@@ -25,7 +25,7 @@
 #define USER_CTRL        0x6A  // Bit 7 enable DMP, bit 3 reset DMP
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
-
+#define A_COMP_FILTER    0.02
 
 enum Ascale {
   AFS_2G = 0,
@@ -45,6 +45,7 @@ int setup_imu();
 void calibrate_imu();      
 void read_imu();    
 void update_filter();
+void write_to_csv();
 
 //global variables
 int imu;
@@ -59,18 +60,27 @@ long time_curr;
 long time_prev;
 struct timespec te;
 float yaw=0;
-float pitch_angle=0;
+float pitch_accel=0;
+float roll_accel=0;
 float roll_angle=0;
+float pitch_angle=0;
+float roll_gyro=0;
+float pitch_gyro=0;
+float real_time=0;
+FILE *fpt;
  
 int main (int argc, char *argv[])
 {
     setup_imu();
     calibrate_imu();
+    fclose(fopen("roll.csv", "w"));
+    fclose(fopen("pitch.csv", "w"));
 
     while(1)
     {
       read_imu();      
       update_filter();   
+      write_to_csv();
       printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
     }
 }
@@ -151,8 +161,8 @@ void read_imu()
   ax = imu_data[3];
   ay = imu_data[4];
   az = imu_data[5];
-  roll_angle = roll_calibration+atan2(ax, -az)/M_PI*180;
-  pitch_angle = pitch_calibration+atan2(ay, -az)/M_PI*180;
+  roll_accel = roll_calibration+atan2(ax, -az)/M_PI*180;
+  pitch_accel = pitch_calibration+atan2(ay, -az)/M_PI*180;
 }
 
 void update_filter()
@@ -172,8 +182,23 @@ void update_filter()
   //convert to seconds
   imu_diff=imu_diff/1000000000;
   time_prev=time_curr;
+  real_time += imu_diff;
   
   //comp. filter for roll, pitch here: 
+  roll_gyro += imu_data[1]*imu_diff;
+  pitch_gyro += imu_data[0]*imu_diff;
+  roll_angle = roll_accel*A_COMP_FILTER + (1-A_COMP_FILTER)*(roll_angle+imu_data[1]*imu_diff);
+  pitch_angle = pitch_accel*A_COMP_FILTER + (1-A_COMP_FILTER)*(pitch_angle+imu_data[0]*imu_diff);
+}
+
+void write_to_csv()
+{
+  fpt = fopen("roll.csv", "a");
+  fprintf(fpt, "%f, %f, %f, %f\n", real_time, roll_angle, roll_accel, roll_gyro);
+  fclose(fpt);
+  fpt = fopen("pitch.csv", "a");
+  fprintf(fpt, "%f, %f, %f, %f\n", real_time, pitch_angle, pitch_accel, pitch_gyro);
+  fclose(fpt);
 }
 
 int setup_imu()
