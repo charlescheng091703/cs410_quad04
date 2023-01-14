@@ -32,6 +32,9 @@
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
 #define A_COMP_FILTER    0.02
+#define ANG_VEL_LIMIT    300
+#define ROLL_LIMIT       45
+#define PITCH_LIMIT      45
 
 enum Ascale {
   AFS_2G = 0,
@@ -52,6 +55,9 @@ void calibrate_imu();
 void read_imu();    
 void update_filter();
 void write_to_csv();
+void setup_keyboard();
+void trap(int);
+void safety_check();
 
 //global variables
 int imu;
@@ -73,7 +79,16 @@ float pitch_angle=0;
 float roll_gyro=0;
 float pitch_gyro=0;
 float real_time=0;
+float heartbeat_time=0; // time since last heartbeat
+int last_heartbeat=0;
 FILE *fpt;
+struct Keyboard {
+  char key_press;
+  int heartbeat;
+  int version;
+};
+Keyboard* shared_memory; 
+int run_program=1;
  
 int main (int argc, char *argv[])
 {
@@ -81,14 +96,19 @@ int main (int argc, char *argv[])
     calibrate_imu();
     fclose(fopen("resource/roll.csv", "w"));
     fclose(fopen("resource/pitch.csv", "w"));
+    setup_keyboard();
+    signal(SIGINT, &trap);
 
-    while(1)
+    while(run_program==1)
     {
       read_imu();      
       update_filter();   
       write_to_csv();
       printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
+      safety_check();
     }
+
+    return 0;
 }
 
 // Helper function read_raw
@@ -173,7 +193,6 @@ void read_imu()
 
 void update_filter()
 {
-
   //get current time in nanoseconds
   timespec_get(&te,TIME_UTC);
   time_curr=te.tv_nsec;
@@ -249,4 +268,73 @@ int setup_imu()
     wiringPiI2CWriteReg8(imu,  ACCEL_CONFIG2,  c | 0x00);
   }
   return 0;
+}
+
+void setup_keyboard()
+{
+
+  int segment_id;   
+  struct shmid_ds shmbuffer; 
+  int segment_size; 
+  const int shared_segment_size = 0x6400; 
+  int smhkey=33222;
+  
+  /* Allocate a shared memory segment.  */ 
+  segment_id = shmget (smhkey, shared_segment_size,IPC_CREAT | 0666); 
+  /* Attach the shared memory segment.  */ 
+  shared_memory = (Keyboard*) shmat (segment_id, 0, 0); 
+  printf ("shared memory attached at address %p\n", shared_memory); 
+  /* Determine the segment's size. */ 
+  shmctl (segment_id, IPC_STAT, &shmbuffer); 
+  segment_size  =               shmbuffer.shm_segsz; 
+  printf ("segment size: %d\n", segment_size); 
+  /* Write a string to the shared memory segment.  */ 
+  //sprintf (shared_memory, "test!!!!."); 
+}
+
+//when cntrl+c pressed, kill motors
+void trap(int signal)
+{
+   printf("ending program\n\r");
+   run_program=0;
+}
+
+void safety_check()
+{
+  Keyboard keyboard=*shared_memory;
+  if (abs(imu_data[0]) > ANG_VEL_LIMIT || abs(imu_data[1]) > ANG_VEL_LIMIT || abs(imu_data[2]) > ANG_VEL_LIMIT) {
+    run_program = 0;
+  }
+  else if (abs(roll_angle) > ROLL_LIMIT) {
+    run_program = 0;
+  }
+  else if (abs(pitch_angle) > PITCH_LIMIT) {
+    run_program = 0;
+  }
+  else if (keyboard.key_press == ' ') {
+    run_program = 0;
+  }
+  else if (keyboard.heartbeat != last_heartbeat) {
+    last_heartbeat = keyboard.heartbeat;
+    heartbeat_time = 0;
+  }
+  else if (heartbeat_time > 0.25) {
+    run_program = 0;
+  }
+
+  //get current time in nanoseconds
+  timespec_get(&te,TIME_UTC);
+  time_curr=te.tv_nsec;
+  //compute time since last execution
+  float imu_diff=time_curr-time_prev;           
+  
+  //check for rollover
+  if(imu_diff<=0)
+  {
+    imu_diff+=1000000000;
+  }
+  //convert to seconds
+  imu_diff=imu_diff/1000000000;
+  time_prev=time_curr;
+  heartbeat_time += imu_diff;
 }
