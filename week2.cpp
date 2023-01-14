@@ -1,5 +1,5 @@
-// Week 1
-// Author: Charles Cheng
+// Week 2
+// Author: Charles Cheng and Sushma
 
 #include <stdio.h>
 #include <wiringPi.h>
@@ -13,8 +13,14 @@
 #include <sys/stat.h>
 #include <curses.h>
 
+// To transfer files from local to remote, run
+// pscp -pw raspberry week2.cpp pi@192.168.0.1:/home/pi/flight_controller
+
+// To transfer files from remote to local, run
+// pscp -pw raspberry pi@192.168.0.1:/home/pi/flight_controller/roll.csv /home/charles/cs410_quad04
+
 // To compile the code, run 
-// gcc -o week1 week1_student.cpp -lwiringPi -lm
+// gcc -o week2 week2.cpp -lwiringPi -lm
 
 #define frequency 25000000.0
 #define CONFIG           0x1A
@@ -73,8 +79,8 @@ int main (int argc, char *argv[])
 {
     setup_imu();
     calibrate_imu();
-    fclose(fopen("roll.csv", "w"));
-    fclose(fopen("pitch.csv", "w"));
+    fclose(fopen("resource/roll.csv", "w"));
+    fclose(fopen("resource/pitch.csv", "w"));
 
     while(1)
     {
