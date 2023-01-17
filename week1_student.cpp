@@ -25,6 +25,7 @@
 #define USER_CTRL        0x6A  // Bit 7 enable DMP, bit 3 reset DMP
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
+#define A_comp_filter    0.02
 
 
 enum Ascale {
@@ -45,6 +46,7 @@ int setup_imu();
 void calibrate_imu();      
 void read_imu();    
 void update_filter();
+void write_to_csv();
 
 //global variables
 int imu;
@@ -61,16 +63,29 @@ struct timespec te;
 float yaw=0;
 float pitch_angle=0;
 float roll_angle=0;
+float roll_accel=0;
+float pitch_accel=0;
+FILE *fpt;
+float roll_integrate=0;
+float pitch_integrate=0;
+float roll_gyro_delta=0;
+float pitch_gyro_delta=0;
  
 int main (int argc, char *argv[])
 {
     setup_imu();
     calibrate_imu();
+    fpt = fopen("Roll_filter.csv", "w");
+    fclose(fpt);
+    fpt = fopen("Pitch_filter.csv", "w");
+    fclose(fpt);
+
 
     while(1)
     {
       read_imu();      
       update_filter();   
+      write_to_csv();
       printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
     }
 }
@@ -78,6 +93,15 @@ int main (int argc, char *argv[])
 // Helper function read_raw
 // takes in address as input
 // outputs accel/gyro raw values 
+void write_to_csv()
+{
+  fpt = fopen("Roll_filter.csv", "a");
+  fprintf(fpt,"%f, %f, %f\n", roll_accel, roll_angle , roll_integrate);
+  fclose(fpt);
+  fpt = fopen("Pitch_filter.csv", "a");
+  fprintf(fpt,"%f, %f, %f\n", pitch_accel, pitch_angle, pitch_integrate);
+  fclose(fpt);
+}
 int read_raw(int address)
 {
   int vh = wiringPiI2CReadReg8(imu, address);
@@ -151,8 +175,9 @@ void read_imu()
   ax = imu_data[3];
   ay = imu_data[4];
   az = imu_data[5];
-  roll_angle = roll_calibration+atan2(ax, -az)/M_PI*180;
-  pitch_angle = pitch_calibration+atan2(ay, -az)/M_PI*180;
+  roll_accel = roll_calibration+atan2(ax, -az)/M_PI*180;
+  pitch_accel = pitch_calibration+atan2(ay, -az)/M_PI*180;
+  
 }
 
 void update_filter()
@@ -174,6 +199,12 @@ void update_filter()
   time_prev=time_curr;
   
   //comp. filter for roll, pitch here: 
+  roll_gyro_delta = imu_data[1]*imu_diff;
+  pitch_gyro_delta = imu_data[0]*imu_diff;
+  roll_angle =  roll_accel*A_comp_filter + (1-A_comp_filter)*(roll_gyro_delta + roll_angle);
+  pitch_angle =  roll_accel*A_comp_filter + (1-A_comp_filter)*(pitch_gyro_delta+ pitch_angle);
+  roll_integrate += roll_gyro_delta;
+  pitch_integrate += pitch_gyro_delta;
 }
 
 int setup_imu()
