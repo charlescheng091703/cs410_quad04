@@ -1,5 +1,5 @@
 // Week 2
-// Author: Charles Cheng and Sushma
+// Author: Charles Cheng and Sushma Chandra
 
 #include <stdio.h>
 #include <wiringPi.h>
@@ -31,10 +31,10 @@
 #define USER_CTRL        0x6A  // Bit 7 enable DMP, bit 3 reset DMP
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
-#define A_COMP_FILTER    0.02
-#define ANG_VEL_LIMIT    300
-#define ROLL_LIMIT       45
-#define PITCH_LIMIT      45
+#define A_COMP_FILTER    0.02 // weight factor for complementary filter
+#define ANG_VEL_LIMIT    300  // safety check for gyro 
+#define ROLL_LIMIT       45   // safety check for roll 
+#define PITCH_LIMIT      45   // safety check for pitch 
 
 enum Ascale {
   AFS_2G = 0,
@@ -54,10 +54,12 @@ int setup_imu();
 void calibrate_imu();      
 void read_imu();    
 void update_filter();
+void erase_csv();
 void write_to_csv();
 void setup_keyboard();
 void trap(int);
 void safety_check();
+float timer(long, long, float);
 
 //global variables
 int imu;
@@ -68,8 +70,8 @@ float roll_calibration=0;
 float pitch_calibration=0;
 float accel_z_calibration=0;
 float imu_data[6]; // gyro xyz, accel xyz
-long time_curr;
-long time_prev;
+long imu_time_curr, heartbeat_time_curr;
+long imu_time_prev, heartbeat_time_prev;
 struct timespec te;
 float yaw=0;
 float pitch_accel=0;
@@ -78,9 +80,9 @@ float roll_angle=0;
 float pitch_angle=0;
 float roll_gyro=0;
 float pitch_gyro=0;
-float real_time=0;
+float real_time=0; // used for plotting 
 float heartbeat_time=0; // time since last heartbeat
-int last_heartbeat=0;
+int last_heartbeat=0; // value of last heartbeat
 FILE *fpt;
 struct Keyboard {
   char key_press;
@@ -94,10 +96,9 @@ int main (int argc, char *argv[])
 {
     setup_imu();
     calibrate_imu();
-    fclose(fopen("resource/roll.csv", "w"));
-    fclose(fopen("resource/pitch.csv", "w"));
     setup_keyboard();
     signal(SIGINT, &trap);
+    erase_csv();
 
     while(run_program==1)
     {
@@ -193,29 +194,25 @@ void read_imu()
 
 void update_filter()
 {
-  //get current time in nanoseconds
-  timespec_get(&te,TIME_UTC);
-  time_curr=te.tv_nsec;
-  //compute time since last execution
-  float imu_diff=time_curr-time_prev;           
-  
-  //check for rollover
-  if(imu_diff<=0)
-  {
-    imu_diff+=1000000000;
-  }
-  //convert to seconds
-  imu_diff=imu_diff/1000000000;
-  time_prev=time_curr;
-  real_time += imu_diff;
+  float dt = timer(imu_time_curr, imu_time_prev, real_time);
   
   //comp. filter for roll, pitch here: 
-  roll_gyro += imu_data[1]*imu_diff;
-  pitch_gyro += imu_data[0]*imu_diff;
-  roll_angle = roll_accel*A_COMP_FILTER + (1-A_COMP_FILTER)*(roll_angle+imu_data[1]*imu_diff);
-  pitch_angle = pitch_accel*A_COMP_FILTER + (1-A_COMP_FILTER)*(pitch_angle+imu_data[0]*imu_diff);
+  roll_gyro += imu_data[1]*dt;
+  pitch_gyro += imu_data[0]*dt;
+  roll_angle = roll_accel*A_COMP_FILTER + (1-A_COMP_FILTER)*(roll_angle+imu_data[1]*dt);
+  pitch_angle = pitch_accel*A_COMP_FILTER + (1-A_COMP_FILTER)*(pitch_angle+imu_data[0]*dt);
 }
 
+// Erase csv so that only one run is recorded 
+// at a time
+void erase_csv()
+{
+  fclose(fopen("resource/roll.csv", "w"));
+  fclose(fopen("resource/pitch.csv", "w"));
+}
+
+// Writes pitch and roll data to CSV file
+// used for plotting 
 void write_to_csv()
 {
   fpt = fopen("resource/roll.csv", "a");
@@ -230,7 +227,6 @@ int setup_imu()
 {
   wiringPiSetup ();
   
-  
   //setup imu on I2C
   imu=wiringPiI2CSetup (0x68) ; //accel/gyro address
   
@@ -241,13 +237,11 @@ int setup_imu()
   }
   else
   {
-  
     printf("Connected to I2C device %d\n",imu);
     printf("IMU who am I is %d \n",wiringPiI2CReadReg8(imu,0x75));
     
     uint8_t Ascale = AFS_2G;     // AFS_2G, AFS_4G, AFS_8G, AFS_16G
     uint8_t Gscale = GFS_500DPS; // GFS_250DPS, GFS_500DPS, GFS_1000DPS, GFS_2000DPS
-    
     
     //init imu
     wiringPiI2CWriteReg8(imu,PWR_MGMT_1, 0x00);
@@ -272,7 +266,6 @@ int setup_imu()
 
 void setup_keyboard()
 {
-
   int segment_id;   
   struct shmid_ds shmbuffer; 
   int segment_size; 
@@ -288,8 +281,6 @@ void setup_keyboard()
   shmctl (segment_id, IPC_STAT, &shmbuffer); 
   segment_size  =               shmbuffer.shm_segsz; 
   printf ("segment size: %d\n", segment_size); 
-  /* Write a string to the shared memory segment.  */ 
-  //sprintf (shared_memory, "test!!!!."); 
 }
 
 //when cntrl+c pressed, kill motors
@@ -311,30 +302,40 @@ void safety_check()
   else if (abs(pitch_angle) > PITCH_LIMIT) {
     run_program = 0;
   }
-  else if (keyboard.key_press == ' ') {
+  else if (keyboard.key_press == ' ') { // check if space is pressed
     run_program = 0;
   }
   else if (keyboard.heartbeat != last_heartbeat) {
     last_heartbeat = keyboard.heartbeat;
     heartbeat_time = 0;
   }
-  else if (heartbeat_time > 0.25) {
+  else if (heartbeat_time > 0.25) { // check keyboard timeout 
     run_program = 0;
   }
+  timer(heartbeat_time_curr, heartbeat_time_prev, heartbeat_time); // increment heartbeat timer 
+}
 
+// Helper timer function increments time 
+// Return the change in time 
+float timer(long& curr_time, long& prev_time, float& time)
+{
   //get current time in nanoseconds
   timespec_get(&te,TIME_UTC);
-  time_curr=te.tv_nsec;
+  curr_time=te.tv_nsec;
+  
   //compute time since last execution
-  float imu_diff=time_curr-time_prev;           
+  float imu_diff=curr_time-prev_time;           
   
   //check for rollover
   if(imu_diff<=0)
   {
     imu_diff+=1000000000;
   }
+
   //convert to seconds
   imu_diff=imu_diff/1000000000;
-  time_prev=time_curr;
-  heartbeat_time += imu_diff;
+  prev_time=curr_time;
+  time += imu_diff; 
+
+  return imu_diff;
 }
