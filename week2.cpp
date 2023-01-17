@@ -304,15 +304,19 @@ void safety_check()
   Keyboard keyboard=*shared_memory;
   if (abs(imu_data[0]) > ANG_VEL_LIMIT || abs(imu_data[1]) > ANG_VEL_LIMIT || abs(imu_data[2]) > ANG_VEL_LIMIT) {
     run_program = 0;
+    printf("Ending program. Gyro rate exceeded limit.\n\r");
   }
   else if (abs(roll_angle) > ROLL_LIMIT) {
     run_program = 0;
+    printf("Ending program. Roll exceeded limit.\n\r");
   }
   else if (abs(pitch_angle) > PITCH_LIMIT) {
     run_program = 0;
+    printf("Ending program. Pitch exceeded limit.\n\r");
   }
   else if (keyboard.key_press == ' ') {
     run_program = 0;
+    printf("Ending program. Space pressed.\n\r");
   }
   else if (keyboard.heartbeat != last_heartbeat) {
     last_heartbeat = keyboard.heartbeat;
@@ -320,6 +324,7 @@ void safety_check()
   }
   else if (heartbeat_time > 0.25) {
     run_program = 0;
+    printf("Ending program. Keyboard timeout.\n\r");
   }
 
   //get current time in nanoseconds
