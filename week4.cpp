@@ -1,4 +1,4 @@
-// Week 3
+// Week 4
 // Author: Charles Cheng and Sushma
 
 #include <stdio.h>
@@ -14,13 +14,13 @@
 #include <curses.h>
 
 // To transfer files from local to remote, run
-// pscp -pw raspberry week2.cpp pi@192.168.0.1:/home/pi/flight_controller
+// pscp -pw raspberry week4.cpp pi@192.168.0.1:/home/pi/flight_controller
 
 // To transfer files from remote to local, run
 // pscp -pw raspberry pi@192.168.0.1:/home/pi/flight_controller/roll.csv /home/charles/cs410_quad04
 
 // To compile the code, run 
-// gcc -o week3 week3.cpp -lwiringPi -lm
+// gcc -o week4 week4.cpp -lwiringPi -lm
 
 #define frequency 25000000.0
 #define CONFIG           0x1A
@@ -31,11 +31,11 @@
 #define USER_CTRL        0x6A  // Bit 7 enable DMP, bit 3 reset DMP
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
-#define A_COMP_FILTER    0.02
+#define A_COMP_FILTER    0.005
 #define ANG_VEL_LIMIT    300
 #define ROLL_LIMIT       45
 #define PITCH_LIMIT      45
-#define PWM_MAX 1300
+#define PWM_MAX 1400
 #define frequency 25000000.0
 #define LED0 0x6			
 #define LED0_ON_L 0x6		
@@ -43,8 +43,10 @@
 #define LED0_OFF_L 0x8		
 #define LED0_OFF_H 0x9		
 #define LED_MULTIPLYER 4	
-#define P 8
-#define NTRL_POW 1100
+#define P 11 // 0-15
+#define I 0.02 // <0.05
+#define D 1.1 // 0-150
+#define NTRL_POW 1200
 
 enum Ascale {
   AFS_2G = 0,
@@ -252,7 +254,11 @@ void write_to_csv()
   fclose(fpt);
 
   fpt = fopen("resource/motor_pitch.csv", "a");
-  fprintf(fpt, "%f, %f, %f, %f, %f\n", real_time, motor_cntrl0, motor_cntrl1, pitch_accel, pitch_angle);
+  fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f\n", real_time, motor_cntrl0, motor_cntrl1, motor_cntrl2, motor_cntrl3, pitch_angle, imu_data[0]);
+  fclose(fpt);
+
+  fpt = fopen("resource/motor_pitch2.csv", "a");
+  fprintf(fpt, "%f, %f, %f, %f, %f, %f, %f, %f\n", real_time, motor_cntrl0, motor_cntrl1, motor_cntrl2, motor_cntrl3, pitch_angle, pitch_accel, pitch_gyro);
   fclose(fpt);
 }
 
@@ -463,13 +469,13 @@ void set_PWM( uint8_t channel, float time_on_us)
 
 void pid_update()
 {
-  motor_cntrl0 = NTRL_POW-pitch_angle*P;
-  motor_cntrl3 = NTRL_POW-pitch_angle*P;
+  motor_cntrl0 = NTRL_POW+pitch_angle*P+imu_data[0]*D;
+  motor_cntrl3 = NTRL_POW+pitch_angle*P+imu_data[0]*D;
   set_PWM(0, motor_cntrl0); 
   set_PWM(3, motor_cntrl3); 
   
-  motor_cntrl1 = NTRL_POW+pitch_angle*P;
-  motor_cntrl2 = NTRL_POW-pitch_angle*P;
+  motor_cntrl1 = NTRL_POW-pitch_angle*P-imu_data[0]*D;
+  motor_cntrl2 = NTRL_POW-pitch_angle*P-imu_data[0]*D;
   set_PWM(1, motor_cntrl1); 
   set_PWM(2, motor_cntrl2); 
 }
