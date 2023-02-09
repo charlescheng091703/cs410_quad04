@@ -14,13 +14,13 @@
 #include <curses.h>
 
 // To transfer files from local to remote, run
-// pscp -pw raspberry week4.cpp pi@192.168.0.1:/home/pi/flight_controller
+// pscp -pw raspberry week5.cpp pi@192.168.0.1:/home/pi/flight_controller
 
 // To transfer files from remote to local, run
-// pscp -pw raspberry pi@192.168.0.1:/home/pi/flight_controller/roll.csv /home/charles/cs410_quad04
+// pscp -pw raspberry pi@192.168.0.1:/home/pi/flight_controller/resource/pitch.csv /home/charles/cs410_quad04
 
 // To compile the code, run 
-// gcc -o week4 week4.cpp -lwiringPi -lm
+// gcc -o week5 week5.cpp -lwiringPi -lm
 
 #define frequency 25000000.0
 #define CONFIG           0x1A
@@ -31,8 +31,8 @@
 #define USER_CTRL        0x6A  // Bit 7 enable DMP, bit 3 reset DMP
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
-#define A_COMP_FILTER    0.005
-#define ANG_VEL_LIMIT    300
+#define A_COMP_FILTER    0.001 // 0.005
+#define ANG_VEL_LIMIT    500
 #define ROLL_LIMIT       45
 #define PITCH_LIMIT      45
 #define PWM_MAX 1400
@@ -42,11 +42,15 @@
 #define LED0_ON_H 0x7		
 #define LED0_OFF_L 0x8		
 #define LED0_OFF_H 0x9		
-#define LED_MULTIPLYER 4	
-#define P 11 // 0-15
-#define I 0.02 // <0.05
-#define D 1.1 // 0-150
-#define NTRL_POW 1200
+#define LED_MULTIPLYER 4
+#define P_ROLL 15
+#define I_ROLL 0.04
+#define D_ROLL 1.4
+#define P_PITCH 20
+#define I_PITCH 0.02 
+#define D_PITCH 1.4 
+#define NTRL_Thrust 1300.0
+#define I_CAP 100.0
 
 enum Ascale {
   AFS_2G = 0,
@@ -69,11 +73,12 @@ void update_filter();
 void write_to_csv();
 void setup_keyboard();
 void trap(int);
-void safety_check();
+void keyboard_check();
 void init_pwm();
 void init_motor(uint8_t);
 void set_PWM(uint8_t, float);
 void pid_update();
+void kill_motors();
 
 //global variables
 int imu;
@@ -86,6 +91,7 @@ float accel_z_calibration=0;
 float imu_data[6]; // gyro xyz, accel xyz
 long time_curr;
 long time_prev;
+float imu_diff;
 struct timespec te;
 float yaw=0;
 float pitch_accel=0;
@@ -110,7 +116,13 @@ struct Keyboard {
 Keyboard* shared_memory; 
 int run_program=1;
 int pwm;
- 
+float intg_pitch=0;
+float intg_roll=0;
+float Thrust=NTRL_Thrust;
+float desired_pitch=0.0;
+float desired_roll=0.0;
+int prev_keyboard_ver=0;
+
 int main (int argc, char *argv[])
 {
     init_pwm();
@@ -122,19 +134,31 @@ int main (int argc, char *argv[])
     setup_imu();
     calibrate_imu();
     fclose(fopen("resource/motor_pitch.csv", "w"));
-    fclose(fopen("resource/pitch.csv", "w"));
+    fclose(fopen("resource/motor_pitch2.csv", "w"));
+    fclose(fopen("resource/roll.csv", "w"));
     setup_keyboard();
     signal(SIGINT, &trap);
+    timespec_get(&te,TIME_UTC);
+    time_prev=te.tv_nsec;
+    
+    // Keyboard keyboard=*shared_memory;
+    // while (keyboard.key_press != 'u') {
+    //   keyboard=*shared_memory;
+    // }
+    // printf("Unpaused.\n\r");
 
     while(run_program==1)
     {
       read_imu();      
       update_filter();   
       write_to_csv();
-      printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
-      safety_check();
+      // printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
+      // printf("%f %f\n", pitch_angle, intg_pitch);
+      printf("%f %f %f\n", roll_angle, desired_roll, intg_roll);
+      keyboard_check();
       pid_update();
     }
+    kill_motors();
 
     return 0;
 }
@@ -225,7 +249,7 @@ void update_filter()
   timespec_get(&te,TIME_UTC);
   time_curr=te.tv_nsec;
   //compute time since last execution
-  float imu_diff=time_curr-time_prev;           
+  imu_diff=time_curr-time_prev;           
   
   //check for rollover
   if(imu_diff<=0)
@@ -249,8 +273,8 @@ void write_to_csv()
   // fpt = fopen("resource/roll.csv", "a");
   // fprintf(fpt, "%f, %f, %f, %f\n", real_time, roll_angle, roll_accel, roll_gyro);
   // fclose(fpt);
-  fpt = fopen("resource/pitch.csv", "a");
-  fprintf(fpt, "%f, %f, %f, %f\n", real_time, pitch_angle, pitch_accel, pitch_gyro);
+  fpt = fopen("resource/roll.csv", "a");
+  fprintf(fpt, "%f, %f, %f\n", real_time, desired_roll, roll_angle);
   fclose(fpt);
 
   fpt = fopen("resource/motor_pitch.csv", "a");
@@ -335,7 +359,7 @@ void trap(int signal)
    run_program=0;
 }
 
-void safety_check()
+void keyboard_check()
 {
   Keyboard keyboard=*shared_memory;
   if (abs(imu_data[0]) > ANG_VEL_LIMIT || abs(imu_data[1]) > ANG_VEL_LIMIT || abs(imu_data[2]) > ANG_VEL_LIMIT) {
@@ -350,35 +374,67 @@ void safety_check()
     run_program = 0;
     printf("Ending program. Pitch exceeded limit.\n\r");
   }
-  // TODO: Comment out keyboard safety
-  // else if (keyboard.key_press == ' ') {
-  //   run_program = 0;
-  //   printf("Ending program. Space pressed.\n\r");
-  // }
-  // else if (keyboard.heartbeat != last_heartbeat) {
-  //   last_heartbeat = keyboard.heartbeat;
-  //   heartbeat_time = 0;
-  // }
-  // else if (heartbeat_time > 0.25) {
-  //   run_program = 0;
-  //   printf("Ending program. Keyboard timeout.\n\r");
-  // }
+  else if (keyboard.heartbeat != last_heartbeat) {
+    last_heartbeat = keyboard.heartbeat;
+    heartbeat_time = 0;
+  }
+  else if (heartbeat_time > 0.25) {
+    run_program = 0;
+    printf("Ending program. Keyboard timeout.\n\r");
+  }
 
-  // //get current time in nanoseconds
-  // timespec_get(&te,TIME_UTC);
-  // time_curr=te.tv_nsec;
-  // //compute time since last execution
-  // float imu_diff=time_curr-time_prev;           
-  
-  // //check for rollover
-  // if(imu_diff<=0)
-  // {
-  //   imu_diff+=1000000000;
-  // }
-  // //convert to seconds
-  // imu_diff=imu_diff/1000000000;
-  // time_prev=time_curr;
-  // heartbeat_time += imu_diff;
+  if (prev_keyboard_ver != keyboard.version)
+  {
+    prev_keyboard_ver = keyboard.version;
+    if (keyboard.key_press == ' ') {
+      run_program = 0;
+      printf("Ending program. Space pressed.\n\r");
+    }
+    else if (keyboard.key_press == 'p') {
+      kill_motors();
+      printf("Paused.\n\r");
+      while (keyboard.key_press != 'u') {
+        keyboard=*shared_memory;
+        if (keyboard.key_press == 'c' && prev_keyboard_ver != keyboard.version) {
+          prev_keyboard_ver = keyboard.version;
+          calibrate_imu();
+          printf("Calibrated.\n\r");
+        }
+      }
+      printf("Unpaused.\n\r");
+      timespec_get(&te,TIME_UTC);
+      time_prev=te.tv_nsec;
+    }
+    else if (keyboard.key_press == 'c') {
+      printf("version= %d \n\r", keyboard.version);
+      printf("Can calibrate only when paused.\n\r");
+    }
+    else if (keyboard.key_press == '+') {
+      Thrust += 1.0; // LIMIT 
+      printf("Thrust increased. Thrust = %f\n\r", Thrust);
+    }
+    else if (keyboard.key_press == '-') {
+      Thrust -= 1.0;
+      printf("Thrust decreased. Thrust = %f\n\r", Thrust);
+    }
+    else if (keyboard.key_press == 3) {
+      desired_pitch += 1.0;
+      printf("Desired_pitch increased. Pitch = %f\n\r", desired_pitch);
+    }
+    else if (keyboard.key_press == 2) {
+      desired_pitch -= 1.0;
+      printf("Desired_pitch decreased. Pitch = %f\n\r", desired_pitch);
+    }
+    else if (keyboard.key_press == 5) {
+      desired_roll -= 1.0;
+      printf("Desired_roll increased. Roll = %f\n\r", desired_roll);
+    }
+    else if (keyboard.key_press == 4) {
+      desired_roll += 1.0;
+      printf("Desired_roll decreased. Roll = %f\n\r", desired_roll);
+    }
+  }
+  heartbeat_time += imu_diff;
 }
 
 void init_pwm()
@@ -467,15 +523,38 @@ void set_PWM( uint8_t channel, float time_on_us)
   }
 }
 
+void kill_motors() {
+  set_PWM(0, 0); 
+  set_PWM(3, 0); 
+  set_PWM(1, 0); 
+  set_PWM(2, 0); 
+}
+
 void pid_update()
 {
-  motor_cntrl0 = NTRL_POW+pitch_angle*P+imu_data[0]*D;
-  motor_cntrl3 = NTRL_POW+pitch_angle*P+imu_data[0]*D;
-  set_PWM(0, motor_cntrl0); 
-  set_PWM(3, motor_cntrl3); 
+  float pitch_error = pitch_angle-desired_pitch;
+  float roll_error = roll_angle-desired_roll;
+  intg_pitch += pitch_error*I_PITCH;
+  intg_roll += roll_error*I_ROLL;
+  if (intg_pitch > I_CAP) {
+    intg_pitch = I_CAP;
+  }
+  else if (intg_pitch < -I_CAP) {
+    intg_pitch = -I_CAP;
+  }
+  if (intg_roll > I_CAP) {
+    intg_roll = I_CAP;
+  }
+  else if (intg_roll < -I_CAP) {
+    intg_roll = -I_CAP;
+  }
   
-  motor_cntrl1 = NTRL_POW-pitch_angle*P-imu_data[0]*D;
-  motor_cntrl2 = NTRL_POW-pitch_angle*P-imu_data[0]*D;
+  motor_cntrl0 = Thrust+pitch_error*P_PITCH-roll_error*P_ROLL+intg_pitch-intg_roll+imu_data[0]*D_PITCH-imu_data[1]*D_ROLL;
+  motor_cntrl1 = Thrust-pitch_error*P_PITCH-roll_error*P_ROLL-intg_pitch-intg_roll-imu_data[0]*D_PITCH-imu_data[1]*D_ROLL;
+  motor_cntrl2 = Thrust-pitch_error*P_PITCH+roll_error*P_ROLL-intg_pitch+intg_roll-imu_data[0]*D_PITCH+imu_data[1]*D_ROLL;
+  motor_cntrl3 = Thrust+pitch_error*P_PITCH+roll_error*P_ROLL+intg_pitch+intg_roll+imu_data[0]*D_PITCH+imu_data[1]*D_ROLL;
+  set_PWM(0, motor_cntrl0); 
   set_PWM(1, motor_cntrl1); 
   set_PWM(2, motor_cntrl2); 
+  set_PWM(3, motor_cntrl3); 
 }
