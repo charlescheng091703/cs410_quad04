@@ -22,6 +22,7 @@
 // To compile the code, run 
 // gcc -o week6 week6.cpp -lwiringPi -lm
 
+// To start the client to the server publishing controller inputs, run 
 // ./client 192.168.0.26
 
 #define frequency 25000000.0
@@ -33,11 +34,11 @@
 #define USER_CTRL        0x6A  // Bit 7 enable DMP, bit 3 reset DMP
 #define PWR_MGMT_1       0x6B // Device defaults to the SLEEP mode
 #define PWR_MGMT_2       0x6C
-#define A_COMP_FILTER    0.004 // 0.005
+#define A_COMP_FILTER    0.004
 #define ANG_VEL_LIMIT    500
 #define ROLL_LIMIT       45
 #define PITCH_LIMIT      45
-#define PWM_MAX 1400
+#define PWM_MAX 1950
 #define frequency 25000000.0
 #define LED0 0x6			
 #define LED0_ON_L 0x6		
@@ -54,10 +55,10 @@
 #define P_YAW 2.5 
 #define NTRL_Thrust 1475.0
 #define I_CAP 100.0
-#define JOY_PITCH 30
-#define JOY_ROLL 30
-#define JOY_YAW 150
-#define JOY_THRUST 950
+#define JOY_PITCH 30 // divide by 2 = max/min desired pitch angle
+#define JOY_ROLL 30 // divide by 2 = max/min desired pitch angle
+#define JOY_YAW 150 // divide by 2 = max/min desired yaw 
+#define JOY_THRUST 950 // range of thrust values (1000 to 1950)
 
 enum Ascale {
   AFS_2G = 0,
@@ -121,7 +122,7 @@ struct Keyboard {
   int roll;
   int yaw;
   int thrust;
-  int sequence_num;
+  int sequence_num; // heartbeat
 };
 Keyboard* shared_memory; 
 int run_program=1;
@@ -143,12 +144,16 @@ int main (int argc, char *argv[])
     delay(1000);
     setup_imu();
     calibrate_imu();
+    
+    // Clear file contents
     fclose(fopen("resource/motor_pitch.csv", "w"));
     fclose(fopen("resource/motor_pitch2.csv", "w"));
     fclose(fopen("resource/yaw.csv", "w"));
+    
     setup_keyboard();
     signal(SIGINT, &trap);
     
+    // Wait for user to unpause
     Keyboard keyboard=*shared_memory;
     while (keyboard.keypress != 34) {
       keyboard=*shared_memory;
@@ -162,9 +167,7 @@ int main (int argc, char *argv[])
       read_imu();      
       update_filter();   
       write_to_csv();
-      // printf("vx:%10.5f\tvy:%10.5f\tvz:%10.5f\tpitch:%10.5f\troll:%10.5f\n", imu_data[0], imu_data[1], imu_data[2], pitch_angle, roll_angle);
-      // printf("%f %f\n", pitch_angle, intg_pitch);
-      printf("%f\t%f\t%f\t%f\n", pitch_angle, desired_pitch, roll_angle, desired_roll);
+      // printf("%f\t%f\t%f\t%f\n", pitch_angle, desired_pitch, roll_angle, desired_roll);
       get_joystick();
       pid_update();
     }
@@ -299,8 +302,7 @@ void write_to_csv()
 int setup_imu()
 {
   wiringPiSetup ();
-  
-  
+
   //setup imu on I2C
   imu=wiringPiI2CSetup (0x68) ; //accel/gyro address
   
@@ -311,13 +313,11 @@ int setup_imu()
   }
   else
   {
-  
     printf("Connected to I2C device %d\n",imu);
     printf("IMU who am I is %d \n",wiringPiI2CReadReg8(imu,0x75));
     
     uint8_t Ascale = AFS_2G;     // AFS_2G, AFS_4G, AFS_8G, AFS_16G
     uint8_t Gscale = GFS_500DPS; // GFS_250DPS, GFS_500DPS, GFS_1000DPS, GFS_2000DPS
-    
     
     //init imu
     wiringPiI2CWriteReg8(imu,PWR_MGMT_1, 0x00);
@@ -342,7 +342,6 @@ int setup_imu()
 
 void setup_keyboard()
 {
-
   int segment_id;   
   struct shmid_ds shmbuffer; 
   int segment_size; 
@@ -353,16 +352,16 @@ void setup_keyboard()
   segment_id = shmget (smhkey, shared_segment_size,IPC_CREAT | 0666); 
   /* Attach the shared memory segment.  */ 
   shared_memory = (Keyboard*) shmat (segment_id, 0, 0); 
-  printf ("shared memory attached at address %p\n", shared_memory); 
+  // printf ("shared memory attached at address %p\n", shared_memory); 
   /* Determine the segment's size. */ 
   shmctl (segment_id, IPC_STAT, &shmbuffer); 
-  segment_size  =               shmbuffer.shm_segsz; 
-  printf ("segment size: %d\n", segment_size); 
+  segment_size = shmbuffer.shm_segsz; 
+  // printf ("segment size: %d\n", segment_size); 
   /* Write a string to the shared memory segment.  */ 
   //sprintf (shared_memory, "test!!!!."); 
 }
 
-//when cntrl+c pressed, kill motors
+// when cntrl+c pressed, kill motors
 void trap(int signal)
 {
    printf("ending program\n\r");
@@ -400,9 +399,9 @@ void get_joystick()
   else if (keyboard.keypress == 33) {
     kill_motors();
     printf("Paused.\n\r");
-    while (keyboard.keypress != 34) {
+    while (keyboard.keypress != 34) { // do nothing if unpaused not pressed
       keyboard=*shared_memory;
-      if (keyboard.keypress == 35) {
+      if (keyboard.keypress == 35) { // calibrate if button pressed when paused
         calibrate_imu();
         printf("Calibrated.\n\r");
       }
@@ -418,11 +417,14 @@ void get_joystick()
   desired_pitch = keyboard.pitch/224.0*JOY_PITCH-0.57143*JOY_PITCH;
   desired_roll = -keyboard.roll/224.0*JOY_ROLL+0.57143*JOY_ROLL;
   Thrust = NTRL_Thrust + keyboard.thrust/224.0*JOY_THRUST-0.57143*JOY_THRUST;
+  
+  // upper and lower limits of PWM
   if (Thrust > 1950) {
     Thrust = 1950;
   }
   else if (Thrust < 1000) {
     Thrust = 1000;
+  
   }
   desired_yaw = keyboard.yaw/224.0*JOY_YAW-0.57143*JOY_YAW;
   heartbeat_time += imu_diff;
@@ -430,16 +432,13 @@ void get_joystick()
 
 void init_pwm()
 {
-
     pwm=wiringPiI2CSetup (0x40);
     if(pwm==-1)
     {
       printf("-----cant connect to I2C device %d --------\n",pwm);
-     
     }
     else
     {
-  
       float freq =400.0*.95;
       float prescaleval = 25000000;
       prescaleval /= 4096;
@@ -471,8 +470,8 @@ void init_motor(uint8_t channel)
 	wiringPiI2CWriteReg8(pwm, LED0_OFF_H + LED_MULTIPLYER * channel, off_value >> 8);
 	delay(100);
 
-	 time_on_us=1200;
-	 off_value=round((time_on_us*4096.f)/(1000000.f/400.0));
+	time_on_us=1200;
+	off_value=round((time_on_us*4096.f)/(1000000.f/400.0));
 
 	wiringPiI2CWriteReg8(pwm, LED0_ON_L + LED_MULTIPLYER * channel, on_value & 0xFF);
 	wiringPiI2CWriteReg8(pwm, LED0_ON_H + LED_MULTIPLYER * channel, on_value >> 8);
@@ -480,15 +479,14 @@ void init_motor(uint8_t channel)
 	wiringPiI2CWriteReg8(pwm, LED0_OFF_H + LED_MULTIPLYER * channel, off_value >> 8);
 	delay(100);
 
-	 time_on_us=1000;
-	 off_value=round((time_on_us*4096.f)/(1000000.f/400.0));
+	time_on_us=1000;
+	off_value=round((time_on_us*4096.f)/(1000000.f/400.0));
 
 	wiringPiI2CWriteReg8(pwm, LED0_ON_L + LED_MULTIPLYER * channel, on_value & 0xFF);
 	wiringPiI2CWriteReg8(pwm, LED0_ON_H + LED_MULTIPLYER * channel, on_value >> 8);
 	wiringPiI2CWriteReg8(pwm, LED0_OFF_L + LED_MULTIPLYER * channel, off_value & 0xFF);
 	wiringPiI2CWriteReg8(pwm, LED0_OFF_H + LED_MULTIPLYER * channel, off_value >> 8);
 	delay(100);
-
 }
 
 void set_PWM( uint8_t channel, float time_on_us)
@@ -528,6 +526,8 @@ void pid_update()
   float yaw_error = imu_data[2]-desired_yaw;
   intg_pitch += pitch_error*I_PITCH;
   intg_roll += roll_error*I_ROLL;
+
+  // upper and lower limits on integrated pitch and roll
   if (intg_pitch > I_CAP) {
     intg_pitch = I_CAP;
   }
