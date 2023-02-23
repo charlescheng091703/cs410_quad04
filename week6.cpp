@@ -58,8 +58,8 @@
 #define NTRL_Thrust 1480 // low: 1500 // high: 1475
 #define JOY_THRUST_MIN 1400
 #define I_CAP 100.0
-#define JOY_PITCH 20 // divide by 2 = max/min desired pitch angle
-#define JOY_ROLL 20 //./f divide by 2 = max/min desired pitch angle
+#define JOY_PITCH 20 // divide by 2 = max/min desired pitch angle // fine: 10
+#define JOY_ROLL 20 //./f divide by 2 = max/min desired pitch angle // fine: 10
 #define JOY_YAW 80 // divide by 2 = max/min desired yaw 
 
 enum Ascale {
