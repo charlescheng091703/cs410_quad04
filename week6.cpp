@@ -39,6 +39,7 @@
 #define ROLL_LIMIT       45
 #define PITCH_LIMIT      45
 #define PWM_MAX 1950
+#define PWM_MIN 1000
 #define frequency 25000000.0
 #define LED0 0x6			
 #define LED0_ON_L 0x6		
@@ -46,19 +47,20 @@
 #define LED0_OFF_L 0x8		
 #define LED0_OFF_H 0x9		
 #define LED_MULTIPLYER 4
-#define P_ROLL 15
+#define P_ROLL 5.0
 #define I_ROLL 0.04
-#define D_ROLL 1.4
-#define P_PITCH 20
+#define D_ROLL 0.5
+#define P_PITCH 8.0
 #define I_PITCH 0.02 
-#define D_PITCH 1.4 
-#define P_YAW 2.5 
-#define NTRL_Thrust 1475.0
+#define D_PITCH 0.7
+#define P_YAW 2.0
+#define JOY_THRUST_MAX 1550 // low: 1580 // high: 1550
+#define NTRL_Thrust 1480 // low: 1500 // high: 1475
+#define JOY_THRUST_MIN 1400
 #define I_CAP 100.0
-#define JOY_PITCH 30 // divide by 2 = max/min desired pitch angle
-#define JOY_ROLL 30 // divide by 2 = max/min desired pitch angle
-#define JOY_YAW 150 // divide by 2 = max/min desired yaw 
-#define JOY_THRUST 950 // range of thrust values (1000 to 1950)
+#define JOY_PITCH 20 // divide by 2 = max/min desired pitch angle
+#define JOY_ROLL 20 //./f divide by 2 = max/min desired pitch angle
+#define JOY_YAW 80 // divide by 2 = max/min desired yaw 
 
 enum Ascale {
   AFS_2G = 0,
@@ -167,7 +169,7 @@ int main (int argc, char *argv[])
       read_imu();      
       update_filter();   
       write_to_csv();
-      // printf("%f\t%f\t%f\t%f\n", pitch_angle, desired_pitch, roll_angle, desired_roll);
+      //printf("%f\t%f\n", desired_pitch, pitch_angle);
       get_joystick();
       pid_update();
     }
@@ -387,7 +389,7 @@ void get_joystick()
     last_heartbeat = keyboard.sequence_num;
     heartbeat_time = 0;
   }
-  else if (heartbeat_time > 0.25) {
+  else if (heartbeat_time > 0.3) {
     run_program = 0;
     printf("Ending program. Joystick timeout.\n\r");
   }
@@ -416,16 +418,13 @@ void get_joystick()
 
   desired_pitch = keyboard.pitch/224.0*JOY_PITCH-0.57143*JOY_PITCH;
   desired_roll = -keyboard.roll/224.0*JOY_ROLL+0.57143*JOY_ROLL;
-  Thrust = NTRL_Thrust + keyboard.thrust/224.0*JOY_THRUST-0.57143*JOY_THRUST;
-  
-  // upper and lower limits of PWM
-  if (Thrust > 1950) {
-    Thrust = 1950;
+  if (keyboard.thrust > 128) {
+    Thrust = NTRL_Thrust + keyboard.thrust/96.0*(JOY_THRUST_MAX-NTRL_Thrust) - 1.33333*(JOY_THRUST_MAX-NTRL_Thrust);
   }
-  else if (Thrust < 1000) {
-    Thrust = 1000;
-  
+  else {
+    Thrust = NTRL_Thrust + (keyboard.thrust/128.0-1.0)*(NTRL_Thrust-JOY_THRUST_MIN);
   }
+  
   desired_yaw = keyboard.yaw/224.0*JOY_YAW-0.57143*JOY_YAW;
   heartbeat_time += imu_diff;
 }
@@ -497,9 +496,9 @@ void set_PWM( uint8_t channel, float time_on_us)
     {
       time_on_us=PWM_MAX;
     }
-    else if(time_on_us<1000)
+    else if(time_on_us<PWM_MIN)
     {
-      time_on_us=1000;
+      time_on_us=PWM_MIN;
     }
   	uint16_t off_value=round((time_on_us*4096.f)/(1000000.f/400.0));
   	wiringPiI2CWriteReg16(pwm, LED0_OFF_L + LED_MULTIPLYER * channel,off_value);
