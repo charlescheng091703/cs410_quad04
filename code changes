@@ -1,0 +1,17 @@
+#include "vive.h"
+
+//declare global struct
+Position local_p;
+
+//call at start of main loop
+init_shared_memory();
+
+//run this command at the start of the while(1) loop to refresh vive data
+ local_p=*position;  
+ 
+ //now you can use the vive sensor values: 
+ local_p.version
+ local_p.x
+ local_p.y
+ local_p.z
+ local_p.yaw

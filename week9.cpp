@@ -1,4 +1,4 @@
-// Week 6
+// Week 10
 // Author: Charles Cheng and Sushma
 
 #include <stdio.h>
@@ -12,6 +12,7 @@
 #include <sys/shm.h>
 #include <sys/stat.h>
 #include <curses.h>
+#include "vive.h"
 
 // To transfer files from local to remote, run
 // pscp -pw raspberry week6.cpp pi@192.168.0.1:/home/pi/flight_controller
@@ -47,20 +48,32 @@
 #define LED0_OFF_L 0x8		
 #define LED0_OFF_H 0x9		
 #define LED_MULTIPLYER 4
-#define P_ROLL 5.0
-#define I_ROLL 0.04
-#define D_ROLL 0.5
+#define P_ROLL 4.5
+#define I_ROLL 0.7
+#define D_ROLL 0.8
 #define P_PITCH 8.0
-#define I_PITCH 0.02 
-#define D_PITCH 0.7
+#define I_PITCH 0.9
+#define D_PITCH 3.0
 #define P_YAW 2.0
-#define JOY_THRUST_MAX 1550 // low: 1580 // high: 1550
-#define NTRL_Thrust 1480 // low: 1500 // high: 1475
-#define JOY_THRUST_MIN 1400
+#define P_VIVE_YAW 600.0
+#define P_VIVE_Y 0.4
+#define D_VIVE_Y 0.03
+#define P_VIVE_X 0.4
+#define D_VIVE_X 0.02
+#define P_THRUST 0.07
+#define I_THRUST 2
+#define D_THRUST 0.003
+#define K_ACCEL_TO_POS 50
+#define A_COMP_FILTER_Z_VEL 0.9
+#define JOY_THRUST_MAX 1600
+#define NTRL_THRUST 1550
+#define JOY_THRUST_MIN 1350
 #define I_CAP 100.0
+#define I_CAP_Z 300.0
 #define JOY_PITCH 20 // divide by 2 = max/min desired pitch angle // fine: 10
-#define JOY_ROLL 20 //./f divide by 2 = max/min desired pitch angle // fine: 10
+#define JOY_ROLL 20 // divide by 2 = max/min desired pitch angle // fine: 10
 #define JOY_YAW 80 // divide by 2 = max/min desired yaw 
+#define VIVE_BOX_SIZE 1000
 
 enum Ascale {
   AFS_2G = 0,
@@ -84,6 +97,7 @@ void write_to_csv();
 void setup_keyboard();
 void trap(int);
 void get_joystick();
+void get_vive();
 void init_pwm();
 void init_motor(uint8_t);
 void set_PWM(uint8_t, float);
@@ -113,6 +127,8 @@ float pitch_gyro=0;
 float real_time=0;
 float heartbeat_time=0; // time since last heartbeat
 int last_heartbeat=0;
+float vive_heartbeat_time=0; 
+int last_vive_heartbeat=0;
 FILE *fpt;
 float motor_cntrl0;
 float motor_cntrl1;
@@ -131,10 +147,28 @@ int run_program=1;
 int pwm;
 float intg_pitch=0;
 float intg_roll=0;
-float Thrust=NTRL_Thrust;
-float desired_pitch=0.0;
-float desired_roll=0.0;
+float desired_thrust_joy=NTRL_THRUST;
+float desired_thrust_vive=0.0;
+float desired_pitch_vive=0.0;
+float desired_pitch_joy=0.0;
+float desired_roll_vive=0.0;
+float desired_roll_joy=0.0;
 float desired_yaw=0.0;
+float desired_x = 0.0;
+float desired_y = 0.0;
+float desired_z = 6750.0;
+float vive_x_prev = 0.0;
+float vive_y_prev = 0.0;
+float vive_x_estimated = 0.0;
+float vive_y_estimated = 0.0;
+float intg_z = 0.0;
+float z_accel_sum = 0.0;
+float z_accel_count = 0.0;
+float z_velocity_estimate = 0.0;
+float vive_z_prev = 0.0;
+
+//declare global struct
+Position local_p;
 
 int main (int argc, char *argv[])
 {
@@ -145,6 +179,7 @@ int main (int argc, char *argv[])
     init_motor(3);
     delay(1000);
     setup_imu();
+    init_shared_memory();
     calibrate_imu();
     
     // Clear file contents
@@ -164,13 +199,20 @@ int main (int argc, char *argv[])
     timespec_get(&te,TIME_UTC);
     time_prev=te.tv_nsec;
 
+    local_p=*position; 
+    vive_x_prev = local_p.x;
+    vive_y_prev = local_p.y;
+    vive_z_prev = local_p.z;
+    vive_x_estimated = local_p.x;
+    vive_y_estimated = local_p.y;
+
     while(run_program==1)
     {
       read_imu();      
       update_filter();   
       write_to_csv();
-      //printf("%f\t%f\n", desired_pitch, pitch_angle);
       get_joystick();
+      get_vive();
       pid_update();
     }
     kill_motors();
@@ -225,6 +267,9 @@ void calibrate_imu()
 
   accel_z_calibration = -1.0-az_avg; // gravity points downwards, -z axis
 
+  desired_x = local_p.x;
+  desired_y = local_p.y;
+
   printf("Calibration complete: %f %f %f %f %f %f\n\r",x_gyro_calibration,y_gyro_calibration,z_gyro_calibration,roll_calibration,pitch_calibration,accel_z_calibration);
 }
 
@@ -256,6 +301,9 @@ void read_imu()
   az = imu_data[5];
   roll_accel = roll_calibration+atan2(ax, -az)/M_PI*180;
   pitch_accel = pitch_calibration+atan2(ay, -az)/M_PI*180;
+
+  z_accel_sum += (accel_z_calibration+0.9275+az); 
+  z_accel_count += 1.0;
 }
 
 void update_filter()
@@ -285,9 +333,6 @@ void update_filter()
 
 void write_to_csv()
 {
-  // fpt = fopen("resource/roll.csv", "a");
-  // fprintf(fpt, "%f, %f, %f, %f\n", real_time, roll_angle, roll_accel, roll_gyro);
-  // fclose(fpt);
   fpt = fopen("resource/yaw.csv", "a");
   fprintf(fpt, "%f, %f, %f, %f, %f\n", motor_cntrl0, motor_cntrl1, motor_cntrl2, motor_cntrl3, imu_data[2]);
   fclose(fpt);
@@ -416,17 +461,87 @@ void get_joystick()
     printf("Can calibrate only when paused.\n\r");
   }
 
-  desired_pitch = keyboard.pitch/224.0*JOY_PITCH-0.57143*JOY_PITCH;
-  desired_roll = -keyboard.roll/224.0*JOY_ROLL+0.57143*JOY_ROLL;
+  float joy_input_pitch = keyboard.pitch/224.0*JOY_PITCH-0.57143*JOY_PITCH;
+  float joy_input_roll = -keyboard.roll/224.0*JOY_ROLL+0.57143*JOY_ROLL;
+  float pitch_error = pitch_angle-joy_input_pitch;
+  float roll_error = roll_angle-joy_input_roll;
+  
+  intg_pitch += pitch_error*I_PITCH;
+  intg_roll += roll_error*I_ROLL;
+
+  // upper and lower limits on integrated pitch and roll
+  if (intg_pitch > I_CAP) {
+    intg_pitch = I_CAP;
+  }
+  else if (intg_pitch < -I_CAP) {
+    intg_pitch = -I_CAP;
+  }
+  if (intg_roll > I_CAP) {
+    intg_roll = I_CAP;
+  }
+  else if (intg_roll < -I_CAP) {
+    intg_roll = -I_CAP;
+  }
+  desired_pitch_joy = pitch_error*P_PITCH+intg_pitch*I_PITCH+imu_data[0]*D_PITCH;
+  desired_roll_joy = roll_error*P_ROLL+intg_roll*I_ROLL+imu_data[1]*D_ROLL;
+
   if (keyboard.thrust > 128) {
-    Thrust = NTRL_Thrust + keyboard.thrust/96.0*(JOY_THRUST_MAX-NTRL_Thrust) - 1.33333*(JOY_THRUST_MAX-NTRL_Thrust);
+    desired_thrust_joy = NTRL_THRUST + keyboard.thrust/96.0*(JOY_THRUST_MAX-NTRL_THRUST) - 1.33333*(JOY_THRUST_MAX-NTRL_THRUST);
   }
   else {
-    Thrust = NTRL_Thrust + (keyboard.thrust/128.0-1.0)*(NTRL_Thrust-JOY_THRUST_MIN);
+    desired_thrust_joy = NTRL_THRUST + (keyboard.thrust/128.0-1.0)*(NTRL_THRUST-JOY_THRUST_MIN);
   }
   
   desired_yaw = keyboard.yaw/224.0*JOY_YAW-0.57143*JOY_YAW;
   heartbeat_time += imu_diff;
+}
+
+void get_vive()
+{
+  local_p=*position; 
+  if (local_p.version != last_vive_heartbeat) {
+    last_vive_heartbeat = local_p.version;
+    vive_heartbeat_time = 0;
+    vive_y_estimated = 0.6*vive_y_estimated+0.4*local_p.y;
+    vive_x_estimated = 0.6*vive_x_estimated+0.4*local_p.x;
+    desired_pitch_vive = -P_VIVE_Y*(vive_y_estimated-desired_y)-D_VIVE_Y*(vive_y_estimated-vive_y_prev)/imu_diff;
+    desired_roll_vive = -P_VIVE_X*(vive_x_estimated-desired_x)-D_VIVE_X*(vive_x_estimated-vive_x_prev)/imu_diff;
+    vive_y_prev = vive_y_estimated;
+    vive_x_prev = vive_x_estimated;
+
+    float z_error = local_p.z-desired_z;
+    intg_z += z_error*I_THRUST;
+    if (intg_z > I_CAP_Z) {
+      intg_z = I_CAP_Z;
+    }
+    else if (intg_z < -I_CAP_Z) {
+      intg_z = -I_CAP_Z;
+    }
+
+    z_velocity_estimate = (z_velocity_estimate+z_accel_sum/z_accel_count*K_ACCEL_TO_POS)*A_COMP_FILTER_Z_VEL+(vive_z_prev-local_p.z)*(1-A_COMP_FILTER_Z_VEL);
+    desired_thrust_vive = P_THRUST*z_error + intg_z - D_THRUST*z_velocity_estimate;
+    //printf("%f\n", local_p.yaw);
+    vive_z_prev = local_p.z;
+    z_accel_sum = 0.0;
+    z_accel_count = 0.0;
+  }
+  else if (vive_heartbeat_time > 0.5) {
+    run_program = 0;
+    printf("Ending program. Vive timeout.\n\r");
+  }
+  else if (abs(vive_x_estimated-desired_x) > VIVE_BOX_SIZE) {
+    run_program = 0;
+    printf("Ending program. Vive X exceeded limit.\n\r");
+  }
+  else if (abs(vive_y_estimated-desired_y) > VIVE_BOX_SIZE) {
+    run_program = 0;
+    printf("Ending program. Vive Y exceeded limit.\n\r");
+  }
+  else if (abs(local_p.yaw) > 1.5708) {
+    run_program = 0;
+    printf("Ending program. Vive Yaw exceeded limit.\n\r");
+  }
+  vive_heartbeat_time += imu_diff;
 }
 
 void init_pwm()
@@ -520,30 +635,17 @@ void kill_motors() {
 
 void pid_update()
 {
-  float pitch_error = pitch_angle-desired_pitch;
-  float roll_error = roll_angle-desired_roll;
+  float desired_pitch = 0.5*desired_pitch_joy + 0.5*desired_pitch_vive;
+  float desired_roll = 0.5*desired_roll_joy + 0.5*desired_roll_vive;
+  float desired_thrust = desired_thrust_joy + desired_thrust_vive;
+  printf("%f\t%f\n", desired_thrust_joy, desired_thrust_vive);
   float yaw_error = imu_data[2]-desired_yaw;
-  intg_pitch += pitch_error*I_PITCH;
-  intg_roll += roll_error*I_ROLL;
-
-  // upper and lower limits on integrated pitch and roll
-  if (intg_pitch > I_CAP) {
-    intg_pitch = I_CAP;
-  }
-  else if (intg_pitch < -I_CAP) {
-    intg_pitch = -I_CAP;
-  }
-  if (intg_roll > I_CAP) {
-    intg_roll = I_CAP;
-  }
-  else if (intg_roll < -I_CAP) {
-    intg_roll = -I_CAP;
-  }
+  float yaw_vive_error = -local_p.yaw;
   
-  motor_cntrl0 = Thrust+pitch_error*P_PITCH-roll_error*P_ROLL+intg_pitch-intg_roll+imu_data[0]*D_PITCH-imu_data[1]*D_ROLL-yaw_error*P_YAW;
-  motor_cntrl1 = Thrust-pitch_error*P_PITCH-roll_error*P_ROLL-intg_pitch-intg_roll-imu_data[0]*D_PITCH-imu_data[1]*D_ROLL+yaw_error*P_YAW;
-  motor_cntrl2 = Thrust-pitch_error*P_PITCH+roll_error*P_ROLL-intg_pitch+intg_roll-imu_data[0]*D_PITCH+imu_data[1]*D_ROLL-yaw_error*P_YAW;
-  motor_cntrl3 = Thrust+pitch_error*P_PITCH+roll_error*P_ROLL+intg_pitch+intg_roll+imu_data[0]*D_PITCH+imu_data[1]*D_ROLL+yaw_error*P_YAW;
+  motor_cntrl0 = desired_thrust+desired_pitch-desired_roll-yaw_error*P_YAW-yaw_vive_error*P_VIVE_YAW;
+  motor_cntrl1 = desired_thrust-desired_pitch-desired_roll+yaw_vive_error*P_VIVE_YAW;
+  motor_cntrl2 = desired_thrust-desired_pitch+desired_roll-yaw_vive_error*P_VIVE_YAW;
+  motor_cntrl3 = desired_thrust+desired_pitch+desired_roll+yaw_error*P_YAW+yaw_vive_error*P_VIVE_YAW;
   set_PWM(0, motor_cntrl0); 
   set_PWM(1, motor_cntrl1); 
   set_PWM(2, motor_cntrl2); 
